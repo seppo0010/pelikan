@@ -787,6 +787,7 @@ _parse_req_hdr(struct request *req, struct buf *buf)
 parse_rstatus_t
 parse_req(struct request *req, struct buf *buf)
 {
+fprintf(stderr, "parse_req\n");
     parse_rstatus_t status = PARSE_OK;
     char *old_rpos = buf->rpos;
     bool leftmost = (buf->rpos == buf->begin);
