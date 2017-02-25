@@ -26,7 +26,7 @@
 #define SLAB_HASH       16
 #define SLAB_USE_CAS    true
 #define ITEM_SIZE_MIN   44      /* 40 bytes item overhead */
-#define ITEM_SIZE_MAX   (SLAB_SIZE - 32) /* 32 bytes slab overhead */
+#define ITEM_SIZE_MAX   (SLAB_SIZE - SLAB_HDR_SIZE)
 #define ITEM_FACTOR     1.25
 #define HASH_POWER      16
 
@@ -62,18 +62,40 @@ typedef struct {
     ACTION( slab_evict,         METRIC_COUNTER, "# slabs evicted"          )\
     ACTION( slab_memory,        METRIC_GAUGE,   "memory allocated to slab" )\
     ACTION( slab_curr,          METRIC_GAUGE,   "# currently active slabs" )\
-    ACTION( item_keyval_byte,   METRIC_GAUGE,   "key + val in bytes"       )\
-    ACTION( item_val_byte,      METRIC_GAUGE,   "value only in bytes"      )\
     ACTION( item_curr,          METRIC_GAUGE,   "# current items"          )\
-    ACTION( item_req,           METRIC_COUNTER, "# items allocated"        )\
-    ACTION( item_req_ex,        METRIC_COUNTER, "# item alloc errors"      )\
-    ACTION( item_insert,        METRIC_COUNTER, "# items inserted"         )\
-    ACTION( item_remove,        METRIC_COUNTER, "# items removed"          )
-
+    ACTION( item_alloc,         METRIC_COUNTER, "# items allocated"        )\
+    ACTION( item_alloc_ex,      METRIC_COUNTER, "# item alloc errors"      )\
+    ACTION( item_dealloc,       METRIC_COUNTER, "# items de-allocated"     )\
+    ACTION( item_linked_curr,   METRIC_GAUGE,   "# current items, linked"  )\
+    ACTION( item_link,          METRIC_COUNTER, "# items inserted to HT"   )\
+    ACTION( item_unlink,        METRIC_COUNTER, "# items removed from HT"  )\
+    ACTION( item_keyval_byte,   METRIC_GAUGE,   "key+val in bytes, linked" )\
+    ACTION( item_val_byte,      METRIC_GAUGE,   "value only in bytes"      )
 
 typedef struct {
     SLAB_METRIC(METRIC_DECLARE)
 } slab_metrics_st;
+
+/*          name                type            description */
+#define PERSLAB_METRIC(ACTION)                                          \
+    ACTION( chunk_size,         METRIC_GAUGE,   "# byte per item cunk" )\
+    ACTION( item_keyval_byte,   METRIC_GAUGE,   "keyval stored (byte) ")\
+    ACTION( item_val_byte,      METRIC_GAUGE,   "value portion of data")\
+    ACTION( item_curr,          METRIC_GAUGE,   "# items stored"       )\
+    ACTION( item_free,          METRIC_GAUGE,   "# free items"         )\
+    ACTION( slab_curr,          METRIC_GAUGE,   "# slabs"              )
+
+typedef struct {
+    PERSLAB_METRIC(METRIC_DECLARE)
+} perslab_metrics_st;
+
+extern perslab_metrics_st perslab[SLABCLASS_MAX_ID];
+extern uint8_t profile_last_id;
+
+#define PERSLAB_INCR(id, metric) INCR(&perslab[id], metric)
+#define PERSLAB_DECR(id, metric) DECR(&perslab[id], metric)
+#define PERSLAB_INCR_N(id, metric, delta) INCR_N(&perslab[id], metric, delta)
+#define PERSLAB_DECR_N(id, metric, delta) DECR_N(&perslab[id], metric, delta)
 
 /*
  * Every slab (struct slab) in the cache starts with a slab header
@@ -105,6 +127,7 @@ struct slab {
     rel_time_t        utime;        /* last update time in secs */
     uint8_t           id;           /* slabclass id */
     uint32_t          padding:24;   /* unused */
+    uint32_t          refcount;     /* # items that can't be evicted */
     uint8_t           data[1];      /* opaque data */
 };
 
@@ -141,6 +164,20 @@ item_to_slab(struct item *it)
     ASSERT(slab->magic == SLAB_MAGIC);
 
     return slab;
+}
+
+static inline void
+slab_ref(struct slab *slab)
+{
+    slab->refcount++;
+}
+
+static inline void
+slab_deref(struct slab *slab)
+{
+    ASSERT(slab->refcount > 0);
+
+    slab->refcount--;
 }
 
 void slab_print(void);

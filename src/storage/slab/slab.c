@@ -12,8 +12,9 @@
 #include <string.h>
 #include <sysexits.h>
 
-#define SLAB_MODULE_NAME       "storage::slab"
-#define SLAB_ALIGN_DOWN(d, n)  ((d) - ((d) % (n)))
+#define SLAB_MODULE_NAME        "storage::slab"
+#define SLAB_ALIGN_DOWN(d, n)   ((d) - ((d) % (n)))
+#define TRIES_MAX               10
 
 struct slab_heapinfo {
     uint8_t         *base;       /* prealloc base */
@@ -24,9 +25,11 @@ struct slab_heapinfo {
     struct slab_tqh slab_lruq;   /* lru slab q */
 };
 
+perslab_metrics_st perslab[SLABCLASS_MAX_ID];
+uint8_t profile_last_id; /* last id in slab profile */
+
 static struct slab_heapinfo heapinfo;             /* info of all allocated slabs */
 static size_t profile[SLABCLASS_MAX_ID + 1];      /* slab profile */
-static uint8_t profile_last_id;                   /* last id in slab profile */
 struct slabclass slabclass[SLABCLASS_MAX_ID + 1]; /* collection of slabs bucketed by slabclass */
 
 size_t slab_size = SLAB_SIZE;           /* # bytes in a slab */
@@ -152,6 +155,10 @@ _slab_slabclass_setup(void)
 
         p->nitem = nitem;
         p->size = item_sz;
+
+        /* chunk_size is static */
+        perslab[id] = (perslab_metrics_st){PERSLAB_METRIC(METRIC_INIT)};
+        UPDATE_VAL(&perslab[id], chunk_size, item_sz);
 
         p->nfree_itemq = 0;
         SLIST_INIT(&p->free_itemq);
@@ -457,6 +464,7 @@ _slab_hdr_init(struct slab *slab, uint8_t id)
 #endif
     slab->id = id;
     slab->padding = 0;
+    slab->refcount = 0;
 }
 
 static bool
@@ -540,9 +548,23 @@ _slab_get_new(void)
 
     _slab_table_update(slab);
     INCR(slab_metrics, slab_curr);
-    INCR_N(slab_metrics, slab_memory,slab_size);
+    PERSLAB_INCR(slab->id, slab_curr);
+    INCR_N(slab_metrics, slab_memory, slab_size);
 
     return slab;
+}
+
+
+/*
+ * Because a slab can have a reserved item (claimed but not linked), which is
+ * requested when a write command does not have the entirety of value in the
+ * buffer, eviction will fail if the slab has a non-zero refcount. True is
+ * returned if the slab is successfully evicted, False if eviction is denied.
+ */
+static inline bool
+_slab_evict_ok(struct slab *slab)
+{
+    return (slab->refcount == 0);
 }
 
 /*
@@ -561,6 +583,8 @@ _slab_evict_one(struct slab *slab)
     uint32_t i;
 
     p = &slabclass[slab->id];
+
+    INCR(slab_metrics, slab_evict);
 
     /* candidate slab is also the current slab */
     if (p->next_item_in_slab != NULL && slab == item_to_slab(p->next_item_in_slab)) {
@@ -588,8 +612,6 @@ _slab_evict_one(struct slab *slab)
 
     /* unlink the slab from its class */
     _slab_lruq_remove(slab);
-
-    INCR(slab_metrics, slab_evict);
 }
 
 /*
@@ -603,11 +625,23 @@ _slab_evict_one(struct slab *slab)
 static struct slab *
 _slab_evict_rand(void)
 {
-    struct slab *slab = _slab_table_rand();
+    struct slab *slab;
+    int i = 0;
 
-    log_debug("random-evicting slab %p with id %u", slab, slab->id);
+    do {
+        slab = _slab_table_rand();
+    } while (slab != NULL && ++i < TRIES_MAX && !_slab_evict_ok(slab));
 
-    _slab_evict_one(slab);
+    if (slab == NULL) {
+        /* warning here because eviction failure should be rare. This can
+         * indicate there are dead/idle connections hanging onto items and
+         * slab refcounts.
+         */
+        log_warn("can't find a slab for random-evicting slab with %d tries", i);
+    } else {
+        log_verb("random-evicting slab %p with id %u", slab, slab->id);
+        _slab_evict_one(slab);
+    }
 
     return slab;
 }
@@ -619,10 +653,22 @@ static struct slab *
 _slab_evict_lru(int id)
 {
     struct slab *slab = _slab_lruq_head();
+    int i = 0;
 
-    log_debug("lru-evicting slab %p with id %u", slab, slab->id);
+    while (slab != NULL && ++i < TRIES_MAX && !_slab_evict_ok(slab)) {
+        slab = TAILQ_NEXT(slab, s_tqe);
+    };
 
-    _slab_evict_one(slab);
+    if (slab == NULL) {
+        /* warning here because eviction failure should be rare. This can
+         * indicate there are dead/idle connections hanging onto items and
+         * slab refcounts.
+         */
+        log_warn("can't find a slab for lru-evicting slab with %d tries", i);
+    } else {
+        log_verb("lru-evicting slab %p with id %u", slab, slab->id);
+        _slab_evict_one(slab);
+    }
 
     return slab;
 }
@@ -726,6 +772,7 @@ _slab_get_item_from_freeq(uint8_t id)
     ASSERT(p->nfree_itemq > 0);
     p->nfree_itemq--;
     SLIST_REMOVE(&p->free_itemq, it, item, i_sle);
+    PERSLAB_DECR(id, item_free);
 
     log_verb("get free q it %p at offset %"PRIu32" with id %"PRIu8, it,
             it->offset, it->id);
@@ -804,6 +851,8 @@ _slab_put_item_into_freeq(struct item *it, uint8_t id)
 
     p->nfree_itemq++;
     SLIST_INSERT_HEAD(&p->free_itemq, it, i_sle);
+
+    PERSLAB_INCR(id, item_free);
 }
 
 /*
