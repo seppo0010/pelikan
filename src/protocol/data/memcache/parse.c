@@ -799,6 +799,7 @@ fprintf(stderr, "parse_req\n");
      * buffer management (e.g. no unbounded read buffer). Currently partial
      * value is not implemented for the response.
      */
+fprintf(stderr, "??? %d, first: %d\n", req->rstate, req->first);
     switch (req->rstate) {
     case REQ_PARSING: /* a new request */
         log_verb("parsing buf %p into req %p", buf, req);
@@ -816,6 +817,7 @@ fprintf(stderr, "parse_req\n");
                 buf->rpos - old_rpos, status);
         if (req->val == 0 || status != PARSE_OK) {
             req->rstate = REQ_PARSED;
+fprintf(stderr, "parsed?\n");
             break;
         }
         /* fall-through intended */
