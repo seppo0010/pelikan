@@ -22,6 +22,11 @@ class PelikanTest(unittest.TestCase):
 
     def tearDown(self):
         self.server.stop()
+        import sys
+        sys.stderr.write('STDERR:\n')
+        sys.stderr.write(self.server.server.stderr.read())
+        sys.stdout.write('STDOUT:\n')
+        sys.stdout.write(self.server.server.stdout.read())
 
     def assertRead(self, expected):
         read = self.client.read(len(expected))
