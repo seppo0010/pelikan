@@ -827,11 +827,13 @@ parse_req(struct request *req, struct buf *buf)
         if (status == PARSE_OK) {
             req->rstate = REQ_PARSED;
             req->partial = false;
+fprintf(stderr, "increasing request parse\n");
             INCR(parse_req_metrics, request_parse);
         } else {
             if (status != PARSE_EUNFIN) {
                 log_debug("parse req returned error state %d", status);
                 req->cerror = 1;
+fprintf(stderr, "increasing request parse_ex\n");
                 INCR(parse_req_metrics, request_parse_ex);
             } else { /* partial val, we return upon partial header above */
                 /*

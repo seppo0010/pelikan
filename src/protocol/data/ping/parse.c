@@ -48,9 +48,11 @@ parse_req(struct buf *buf)
 
     if (cc_memcmp(buf->rpos, REQUEST, REQ_LEN) == 0) {
         buf->rpos += REQ_LEN;
+fprintf(stderr, "increasing request parse\n");
         INCR(parse_req_metrics, request_parse);
         return PARSE_OK;
     } else { /* invalid request */
+fprintf(stderr, "increasing request parse_ex\n");
         INCR(parse_req_metrics, request_parse_ex);
         return PARSE_EOTHER;
     }
