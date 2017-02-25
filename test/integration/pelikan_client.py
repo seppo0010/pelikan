@@ -26,6 +26,7 @@ class PelikanClient(object):
                 else:
                     raise
         self.admin.setblocking(True)
+        print data
         if data[-5:] != 'END\r\n':
             raise Exception('Invalid data while fetching stats: {}'.format(data))
         return dict(line.split(' ')[1:] for line in data[:-5].strip().split('\r\n'))

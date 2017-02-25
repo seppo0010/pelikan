@@ -29,6 +29,14 @@ class PelikanTest(unittest.TestCase):
 
 
     def assertMetrics(self, *args):
+        try:
+            self.doAssertMetrics(*args)
+        except:
+            import time
+            time.sleep(2)
+            self.doAssertMetrics(*args)
+
+    def doAssertMetrics(self, *args):
         stats = self.client.getStats()
         for (k, v) in args:
             self.assertEqual(
