@@ -824,6 +824,7 @@ parse_req(struct request *req, struct buf *buf)
         req->nremain -= req->vstr.len;
         log_verb("this value segment: %"PRIu32", remain: %"PRIu32, req->vstr.len,
                 req->nremain);
+fprintf(stderr, "status is %d\n", status);
         if (status == PARSE_OK) {
             req->rstate = REQ_PARSED;
             req->partial = false;
